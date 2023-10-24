@@ -29,16 +29,11 @@ os.makedirs(run_path, exist_ok=True)
 iter_path = os.path.join(opt.checkpoints_dir, opt.name, 'iter.txt')
 
 torch.cuda.set_device(opt.local_rank)
-torch.distributed.init_process_group(
-    'nccl',
-    init_method='env://'
-)
 device = torch.device(f'cuda:{opt.local_rank}')
 
 train_data = CreateDataset(opt)
-train_sampler = DistributedSampler(train_data)
 train_loader = DataLoader(train_data, batch_size=opt.batchSize, shuffle=False,
-                          num_workers=4, pin_memory=True, sampler=train_sampler)
+                          num_workers=4, pin_memory=True)
 dataset_size = len(train_loader)
 
 warp_model = AFWM_Vitonhd_lrarms(opt, 51)
@@ -46,10 +41,7 @@ warp_model.train()
 warp_model.cuda()
 if opt.PBAFN_warp_checkpoint is not None:
     load_checkpoint_parallel(warp_model, opt.PBAFN_warp_checkpoint)
-warp_model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(warp_model).to(device)
-if opt.isTrain and len(opt.gpu_ids):
-    model = torch.nn.parallel.DistributedDataParallel(
-        warp_model, device_ids=[opt.local_rank])
+model = warp_model.to(device)
 
 params_warp = [p for p in model.parameters()]
 optimizer_warp = torch.optim.Adam(
@@ -63,10 +55,7 @@ discriminator.cuda()
 if opt.pretrain_checkpoint_D is not None:
     load_checkpoint_parallel(discriminator, opt.pretrain_checkpoint_D)
 
-discriminator = torch.nn.SyncBatchNorm.convert_sync_batchnorm(discriminator).to(device)
-if opt.isTrain and len(opt.gpu_ids):
-    discriminator = torch.nn.parallel.DistributedDataParallel(
-        discriminator, device_ids=[opt.local_rank])
+discriminator = discriminator.to(device)
 
 params_D = list(filter(lambda p: p.requires_grad,
                 discriminator.parameters()))
@@ -91,7 +80,6 @@ for epoch in range(start_epoch, opt.niter + opt.niter_decay + 1):
     epoch_start_time = time.time()
     if epoch != start_epoch:
         epoch_iter = epoch_iter % dataset_size
-    train_sampler.set_epoch(epoch)
 
     for i, data in enumerate(train_loader):
         iter_start_time = time.time()
